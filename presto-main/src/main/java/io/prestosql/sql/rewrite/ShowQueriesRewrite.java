@@ -41,6 +41,7 @@ import io.prestosql.spi.security.PrincipalType;
 import io.prestosql.spi.session.PropertyMetadata;
 import io.prestosql.sql.analyzer.QueryExplainer;
 import io.prestosql.sql.parser.ParsingException;
+import io.prestosql.sql.parser.ParsingOptions;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.tree.AllColumns;
 import io.prestosql.sql.tree.ArrayConstructor;
@@ -341,24 +342,29 @@ final class ShowQueriesRewrite
         @Override
         protected Node visitShowCatalogs(ShowCatalogs node, Void context)
         {
-            List<Expression> rows = listCatalogs(session, metadata, accessControl).keySet().stream()
-                    .map(name -> row(new StringLiteral(name)))
-                    .collect(toList());
+            ImmutableList.Builder<Expression> rows = ImmutableList.builder();
 
-            Optional<Expression> predicate = Optional.empty();
+            listCatalogs(session, metadata, accessControl).keySet().stream()
+                    .map(name -> row(new StringLiteral(name)))
+                    .forEach(rows::add);
+
+            // add bogus row so we can support empty catalogs
+            rows.add(row(new StringLiteral("")));
+
+            Expression predicate = sqlParser.createExpression("length(catalog) > 0", new ParsingOptions());
             Optional<String> likePattern = node.getLikePattern();
             if (likePattern.isPresent()) {
-                predicate = Optional.of(new LikePredicate(
-                        identifier("Catalog"),
+                predicate = and(predicate, new LikePredicate(
+                        identifier("catalog"),
                         new StringLiteral(likePattern.get()),
                         node.getEscape().map(StringLiteral::new)));
             }
 
             return simpleQuery(
-                    selectList(new AllColumns()),
-                    aliased(new Values(rows), "catalogs", ImmutableList.of("Catalog")),
+                    selectList(aliasedName("Catalog", "catalog")),
+                    aliased(new Values(rows.build()), "catalogs", ImmutableList.of("catalog")),
                     predicate,
-                    Optional.of(ordering(ascending("Catalog"))));
+                    ordering(ascending("catalog")));
         }
 
         @Override
